@@ -184,12 +184,16 @@ workouts = sorted(zdf["workout"].unique())
 
 n_auto = zdf["auto"].any() and zdf.loc[zdf["auto"], "workout"].nunique()
 theme.header(zone, len(workouts),
-             f"<b>{n_auto}</b> סווגו לפי FTP {ftp}W" if n_auto else "")
+             f"<b>{n_auto}</b> לפי FTP {ftp}W" if n_auto else "")
 
 if zdf.empty:
     st.info(f"אין אימונים ב-{zone}. הוסף אחד מסרגל הצד, "
             f"או בדוק שה-FTP ({ftp}W) מסווג נכון.")
     st.stop()
+
+sessions = [(w, zdf.loc[zdf["workout"] == w, "np"].tolist()) for w in workouts]
+prev = st.session_state.get("sel_workout")
+theme.profile_strip(zone, sessions, prev if prev in workouts else workouts[-1])
 
 per = per_workout(zdf).reindex(workouts)
 lap_mean = zdf.groupby("lap").mean(numeric_only=True)
@@ -202,7 +206,7 @@ x_laps = lap_mean.index
 def render_z2():
     eff = per["eff"].dropna()
     eff_delta = (eff.iloc[-1] - eff.iloc[0]) / eff.iloc[0] * 100 if len(eff) > 1 else np.nan
-    theme.cards(zone, [
+    theme.readout(zone, [
         ("NP ממוצע", fmt(per["np_mean"].mean()), "W", signed(trend(per["np_mean"]), 1, " W/אימון")),
         ("דופק ממוצע", fmt(per["hr_mean"].mean()), "bpm", None),
         ("יעילות NP/HR", fmt(per["eff"].mean(), 2), "W/bpm", signed(eff_delta, 1, "%")),
@@ -258,7 +262,7 @@ def render_z2():
 # ============================ Z3 ============================
 
 def render_z3():
-    theme.cards(zone, [
+    theme.readout(zone, [
         ("NP ממוצע", fmt(per["np_mean"].mean()), "W", signed(trend(per["np_mean"]), 1, " W/אימון")),
         ("פיזור בין מקטעים", fmt(per["np_sd"].mean(), 1), "W", None),
         ("דופק ממוצע", fmt(per["hr_mean"].mean()), "bpm", None),
@@ -325,7 +329,7 @@ def render_z3():
 # ============================ Z4 ============================
 
 def render_z4():
-    theme.cards(zone, [
+    theme.readout(zone, [
         ("שיא מקטע", fmt(per["np_max"].max()), "W", None),
         ("NP ממוצע", fmt(per["np_mean"].mean()), "W", signed(trend(per["np_mean"]), 1, " W/אימון")),
         ("דעיכה ראשון→אחרון", fmt(per["fade"].mean(), 1), "%", None),
@@ -381,15 +385,21 @@ def render_z4():
 {"Z2": render_z2, "Z3": render_z3, "Z4": render_z4}[zone]()
 
 theme.section(zone, "אימון בודד")
-w = st.selectbox("אימון", workouts, index=len(workouts) - 1,
-                 label_visibility="collapsed")
+c_sel, c_pick = st.columns([1, 2])
+with c_sel:
+    default_idx = workouts.index(prev) if prev in workouts else len(workouts) - 1
+    w = st.selectbox("אימון", workouts, index=default_idx, key="sel_workout",
+                     label_visibility="collapsed")
 sub = zdf[zdf["workout"] == w]
 active2 = [m for m in ("hr", "cad") if sub[m].notna().any()]
-picked = st.multiselect("ציר ימין", [METRICS[m]["label"] for m in active2],
-                        default=[METRICS[m]["label"] for m in active2],
-                        label_visibility="collapsed")
+with c_pick:
+    picked = st.multiselect("ציר ימין", [METRICS[m]["label"] for m in active2],
+                            default=[METRICS[m]["label"] for m in active2],
+                            label_visibility="collapsed",
+                            placeholder="ציר ימין")
 
 fig = go.Figure()
+glow(fig, sub["lap"], sub["np"], t["accent"])
 fig.add_trace(go.Scatter(x=sub["lap"], y=sub["np"], name="NP",
                          mode="lines+markers+text",
                          text=[fmt(v) for v in sub["np"]], textposition="top center",
