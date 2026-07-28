@@ -128,20 +128,75 @@ def fill_missing_np(laps, watts):
     return laps
 
 
+def _kmeans_split(values, iters=25):
+    """
+    מחלק ערכים לשתי קבוצות (עבודה/מנוחה) ב-k-means חד-ממדי.
+    מחזיר את הסף בין הקבוצות, או None אם ההפרדה חלשה מדי.
+    """
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return None
+    c_lo, c_hi = lo, hi
+    for _ in range(iters):
+        mid = (c_lo + c_hi) / 2
+        low = [v for v in values if v < mid]
+        high = [v for v in values if v >= mid]
+        if not low or not high:
+            return None
+        n_lo, n_hi = sum(low) / len(low), sum(high) / len(high)
+        if abs(n_lo - c_lo) < 0.5 and abs(n_hi - c_hi) < 0.5:
+            c_lo, c_hi = n_lo, n_hi
+            break
+        c_lo, c_hi = n_lo, n_hi
+    # ההפרדה משמעותית רק אם המרכזים רחוקים דיים ביחס לפיזור הכללי
+    if (c_hi - c_lo) < 0.10 * c_hi:
+        return None
+    return (c_lo + c_hi) / 2
+
+
 def pick_work_laps(laps):
     """
-    מפריד מקטעי עבודה ממנוחות. באימון אינטרוולים הם מתחלפים לסירוגין,
-    אז החיתוך הוא באמצע הטווח. אימון רציף — הכול נחשב עבודה.
+    מפריד מקטעי עבודה ממנוחות. מכיוון שהמשתמש מלכד כל מקטע ב-lap ידני,
+    המבנה כבר קיים בנתונים — צריך רק לזהות את שתי הרמות.
+
+    האסטרטגיה:
+      1. אם המקטעים מתחלפים חזק-חלש-חזק לסירוגין (דפוס אינטרוולים
+         קלאסי), נבחרים המקטעים ה"חזקים" בסירוגין — עמיד גם כשהפער
+         בין עבודה למנוחה קטן, כמו באימון Z4 שהמנוחות בו אינן קלות.
+      2. אחרת, k-means לשתי קבוצות ובחירת הגבוהה.
+      3. אם אין הפרדה ברורה — כל המקטעים הם עבודה (מאמץ רציף).
     """
     usable = [l for l in laps if l["np"] and l["seconds"] >= MIN_LAP_SECONDS]
     if len(usable) < 2:
         return usable
-    lo = min(l["np"] for l in usable)
-    hi = max(l["np"] for l in usable)
-    if hi - lo < hi * 0.12:
-        return usable
-    cut = lo + (hi - lo) / 2
-    return [l for l in usable if l["np"] >= cut]
+
+    nps = [l["np"] for l in usable]
+
+    # (1) דפוס לסירוגין: כל מקטע גבוה משכניו, או נמוך משניהם
+    highs, lows = [], []
+    for i, l in enumerate(usable):
+        left = usable[i - 1]["np"] if i > 0 else None
+        right = usable[i + 1]["np"] if i < len(usable) - 1 else None
+        neigh = [x for x in (left, right) if x is not None]
+        if all(l["np"] > x for x in neigh):
+            highs.append(l)
+        elif all(l["np"] < x for x in neigh):
+            lows.append(l)
+    # דפוס תקף אם רוב המקטעים משתייכים בבירור לאחת הרמות,
+    # וההפרש בין הרמה הגבוהה לנמוכה משמעותי (לא רעש של מאמץ רציף)
+    if len(highs) >= 2 and lows and len(highs) + len(lows) >= len(usable) - 1:
+        mean_hi = sum(l["np"] for l in highs) / len(highs)
+        mean_lo = sum(l["np"] for l in lows) / len(lows)
+        if mean_hi - mean_lo >= 0.05 * mean_hi:
+            return highs
+
+    # (2) k-means לשתי רמות
+    cut = _kmeans_split(nps)
+    if cut is not None:
+        return [l for l in usable if l["np"] >= cut]
+
+    # (3) מאמץ רציף
+    return usable
 
 
 def pick_run_laps(laps):
