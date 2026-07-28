@@ -1,0 +1,47 @@
+name: Garmin Token
+
+# מייצר את טוקן ה-Garmin משרת GitHub, כדי לעקוף בעיות SSL/חומת אש
+# ברשת המקומית. מריצים ידנית, מעתיקים את הפלט ל-secret GARMIN_TOKENS,
+# ואז מוחקים את ה-workflow הזה. אין לו טריגר אוטומטי.
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "אימייל Garmin"
+        required: true
+      password:
+        description: "סיסמת Garmin"
+        required: true
+      mfa:
+        description: "קוד דו-שלבי (אם מופעל בחשבון, אחרת השאר ריק)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  token:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: התקנת תלויות
+        run: pip install -r scripts/requirements.txt
+
+      - name: הסתרת קלט רגיש מהלוגים
+        run: |
+          echo "::add-mask::${{ inputs.password }}"
+          [ -n "${{ inputs.mfa }}" ] && echo "::add-mask::${{ inputs.mfa }}" || true
+
+      - name: יצירת טוקן
+        env:
+          GARMIN_EMAIL: ${{ inputs.email }}
+          GARMIN_PASSWORD: ${{ inputs.password }}
+          GARMIN_MFA: ${{ inputs.mfa }}
+        run: python scripts/garmin_token_ci.py >> "$GITHUB_STEP_SUMMARY"
