@@ -21,19 +21,22 @@ BASE = {
     "mono": '"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace',
 }
 
-ZONES = {
-    "Z2": {"name": "Z2", "full": "אירובי", "accent": "#2E8FFF", "accent2": "#8FC9FF"},
-    "Z3": {"name": "Z3", "full": "טמפו",   "accent": "#21D07A", "accent2": "#8CEDBC"},
-    "Z4": {"name": "Z4", "full": "סף",     "accent": "#FF3B47", "accent2": "#FF9096"},
+VIEWS = {
+    "Z2":   {"name": "Z2",   "full": "אירובי",       "accent": "#2E8FFF", "accent2": "#8FC9FF"},
+    "Z3":   {"name": "Z3",   "full": "טמפו",         "accent": "#21D07A", "accent2": "#8CEDBC"},
+    "Z4":   {"name": "Z4",   "full": "סף",           "accent": "#FF3B47", "accent2": "#FF9096"},
+    "LONG": {"name": "LONG", "full": "רכיבות ארוכות", "accent": "#F5A524", "accent2": "#FFD27F"},
+    "RUN":  {"name": "RUN",  "full": "ריצה",         "accent": "#A855F7", "accent2": "#D8B4FE"},
 }
+ZONES = {k: VIEWS[k] for k in ("Z2", "Z3", "Z4")}
 
 FONTS = ("https://fonts.googleapis.com/css2"
          "?family=IBM+Plex+Sans+Hebrew:wght@400;500;600;700"
          "&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap")
 
 
-def tokens(zone):
-    return {**BASE, **ZONES.get(zone, ZONES["Z4"])}
+def tokens(view):
+    return {**BASE, **VIEWS.get(view, VIEWS["Z4"])}
 
 
 # ---------------------------------------------------------------
@@ -181,12 +184,14 @@ def header(zone, n_workouts, note=""):
     kicker = f"Lap Tracker · <b>{n_workouts}</b> אימונים"
     if note:
         kicker += f" · {note}"
-    ticks = "".join(f'<i class="{"on" if z == zone else ""}"></i>' for z in ZONES)
+    ticks = "".join(f'<i class="{"on" if v == zone else ""}"></i>' for v in VIEWS)
+    nm = t["name"]
+    glyph = (f'{nm[:-1]}<i>{nm[-1]}</i>' if nm.startswith("Z") else f'<i>{nm}</i>')
     st.markdown(f"""
     <div class="lt-head">
       <div class="lt-kicker">{kicker}</div>
       <div class="lt-name">
-        <span class="z">Z<i>{t['name'][1]}</i></span>
+        <span class="z">{glyph}</span>
         <span class="w">{t['full']}</span>
       </div>
       <div class="lt-tick">{ticks}</div>

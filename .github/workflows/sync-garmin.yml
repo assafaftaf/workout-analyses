@@ -1,0 +1,74 @@
+name: Sync Garmin
+
+# 8:00 בישראל כל יום. GitHub מריץ ב-UTC בלבד וישראל מחליפה שעון,
+# לכן יש שתי הרצות והשלב הראשון עוצר את זו שאינה 8:00 מקומית.
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 8:00 בשעון קיץ
+    - cron: "0 6 * * *"   # 8:00 בשעון חורף
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "כמה ימים אחורה לסרוק"
+        required: false
+        default: "10"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-garmin
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: בדיקת שעה מקומית
+        id: clock
+        run: |
+          HOUR=$(TZ=Asia/Jerusalem date +%-H)
+          echo "השעה בישראל: ${HOUR}:00"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$HOUR" != "8" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "לא 8:00 מקומית, מדלג"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.clock.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.clock.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: התקנת תלויות
+        if: steps.clock.outputs.run == 'true'
+        run: pip install -r scripts/requirements.txt
+
+      - name: משיכת אימונים מ-Garmin
+        if: steps.clock.outputs.run == 'true'
+        env:
+          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          MIDWEEK_DAYS: ${{ vars.MIDWEEK_DAYS || '1,2,3' }}
+          LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
+          MIN_LAP_SECONDS: ${{ vars.MIN_LAP_SECONDS || '120' }}
+        run: python scripts/sync_garmin.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: דחיפת השינויים
+        if: steps.clock.outputs.run == 'true'
+        run: |
+          if git diff --quiet -- laps.csv; then
+            echo "אין שינוי ב-laps.csv"
+            exit 0
+          fi
+          git config user.name "garmin-sync[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add laps.csv
+          git commit -m "sync: אימוני אמצע שבוע $(TZ=Asia/Jerusalem date +%F)"
+          git push

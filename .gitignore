@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+garmin_tokens.json
+.streamlit/secrets.toml
