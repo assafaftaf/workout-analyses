@@ -8,19 +8,19 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
 הסקריפט לא מסווג לאזורים. הוא רושם NP ומשך לכל מקטע,
 והדאשבורד מחשב מזה סף מתעדכן ומסווג לבד.
 
-מה נכנס לאן:
-  אופניים ביום אמצע שבוע  ->  interval, מקטעי עבודה בלבד
-  אופניים בכל יום אחר      ->  long, שורת סיכום אחת לרכיבה
-  ריצה                     ->  run, קצב לכל מקטע
+מה נכנס לאן (הסוג נקבע מהמבנה, לא מהיום):
+  אופניים עם מקטעי עבודה ברורים  ->  interval, מקטעי העבודה בלבד
+  אופניים רציף בלי מקטעים         ->  long, שורת סיכום אחת
+  ריצה                            ->  run, קצב לכל מקטע
 
 משתני סביבה:
   GARMIN_TOKENS       base64 של הטוקן מ-garmin_auth.py   (מומלץ)
   GARMIN_EMAIL        גיבוי אם אין טוקן תקף
   GARMIN_PASSWORD
-  MIDWEEK_DAYS        0=שני .. 6=ראשון. ברירת מחדל "1,2,3"
   LOOKBACK_DAYS       ברירת מחדל 10
   MIN_LAP_SECONDS     ברירת מחדל 120
   CSV_PATH            ברירת מחדל laps.csv
+  DEBUG_LAPS          "1" כדי להדפיס כל lap ואת המקטעים שנבחרו, לצורך ניפוי
 """
 
 import base64
@@ -28,7 +28,7 @@ import csv
 import os
 import sys
 import tempfile
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from garminconnect import Garmin
 
@@ -39,10 +39,10 @@ BIKE_TYPES = {"cycling", "road_biking", "indoor_cycling", "virtual_ride",
               "gravel_cycling", "mountain_biking", "cyclocross", "track_cycling",
               "recumbent_cycling", "downhill_biking", "e_bike_fitness"}
 
-MIDWEEK_DAYS = {int(d) for d in os.getenv("MIDWEEK_DAYS", "1,2,3").split(",") if d.strip()}
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "10"))
 MIN_LAP_SECONDS = int(os.getenv("MIN_LAP_SECONDS", "120"))
 CSV_PATH = os.getenv("CSV_PATH", "laps.csv")
+DEBUG_LAPS = os.getenv("DEBUG_LAPS", "").strip().lower() in ("1", "true", "yes")
 
 # Garmin משנה שמות שדות בין גרסאות, לכן כל מדד מחפש כמה מועמדים
 LAP_KEYS = {
@@ -212,11 +212,6 @@ def pick_run_laps(laps):
     return [l for l in usable if l["pace"] <= cut]
 
 
-def is_midweek(start_local):
-    """Garmin מחזיר 'YYYY-MM-DD HH:MM:SS' בזמן מקומי."""
-    return datetime.fromisoformat(start_local.replace("T", " ")).weekday() in MIDWEEK_DAYS
-
-
 def type_key(activity):
     return ((activity.get("activityType") or {}).get("typeKey") or "").lower()
 
@@ -232,13 +227,26 @@ def is_run(activity):
 
 
 def route(activity):
-    """מחזיר (ענף, סוג) או None אם הפעילות לא רלוונטית."""
-    when = activity.get("startTimeLocal", "")
+    """מחזיר את הענף (bike/run) או None. הסוג נקבע מאוחר יותר מהמבנה."""
     if is_run(activity):
-        return "run", "interval"
+        return "run"
     if is_bike(activity):
-        return "bike", "interval" if is_midweek(when) else "long"
+        return "bike"
     return None
+
+
+def has_intervals(laps):
+    """
+    האם באימון יש מבנה של אינטרוולים? נקבע מהנתונים ולא מהיום בשבוע —
+    אימון Z4 בשבת הוא עדיין אינטרוולים. אם pick_work_laps מוצא תת-קבוצה
+    ברורה של מקטעי עבודה (לא כל המקטעים), זה אימון אינטרוולים.
+    """
+    usable = [l for l in laps if l["np"] and l["seconds"] >= MIN_LAP_SECONDS]
+    if len(usable) < 3:
+        return False
+    work = pick_work_laps(laps)
+    # מבנה אינטרוולים = חלק מהמקטעים עבודה, ולפחות שניים כאלה
+    return 2 <= len(work) < len(usable)
 
 
 def pace_of(lap):
@@ -332,13 +340,27 @@ def main():
     log(f"נמצאו {len(found)} פעילויות ב-{LOOKBACK_DAYS} הימים האחרונים")
 
     new_rows = []
-    for act, (sport, kind) in found:
+    for act, sport in found:
         name = act["startTimeLocal"][:10]
         if name in known:
             log(f"· {name} כבר קיים, מדלג")
             continue
 
         laps = fetch_laps(api, act["activityId"])
+
+        # הסוג נקבע מהמבנה: ריצה תמיד אינטרוולים, אופניים לפי הדפוס.
+        # אימון עם מקטעי עבודה ברורים הוא interval, גם בשבת.
+        if sport == "run":
+            kind = "interval"
+        else:
+            kind = "interval" if has_intervals(laps) else "long"
+
+        if DEBUG_LAPS:
+            log(f"  DEBUG {name} · {sport}/{kind} · כל הלאפים (מקטע: זמן, NP, קצב):")
+            for l in laps:
+                log(f"    lap {l['lap']:2d}: {l['seconds']:4d}s  "
+                    f"NP={l['np'] if l['np'] is not None else '—'}  "
+                    f"pace={l['pace'] if l.get('pace') is not None else '—'}")
 
         if kind == "long":
             # רכיבה ארוכה: שורת סיכום אחת, בלי פירוק למקטעים
@@ -362,6 +384,12 @@ def main():
             continue
 
         work = pick_work_laps(laps) if sport == "bike" else pick_run_laps(laps)
+
+        if DEBUG_LAPS:
+            key = "pace" if sport == "run" else "np"
+            log(f"  DEBUG {name} · מקטעי עבודה שנבחרו: "
+                f"{[l[key] for l in work]}")
+
         if not work:
             log(f"· {name} אין מקטעי עבודה, מדלג")
             continue
