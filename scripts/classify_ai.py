@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-סיווג אימון בעזרת Claude, כמוצא אחרון כשההיוריסטיקה לא ודאית.
+סיווג אימון בעזרת Gemini (ה-API החינמי של גוגל).
 
 ה-AI מקבל רק את מבנה האימון — משך ו-NP לכל מקטע — ומחזיר JSON
 עם סוג האימון ואילו מקטעים הם עבודה. הוא לא ממציא נתונים: כל
 המספרים כבר קיימים, ה-AI רק מזהה את המבנה.
 
 משתני סביבה:
-  ANTHROPIC_API_KEY   חובה כדי להפעיל את הסיווג ב-AI
-  AI_MODEL            ברירת מחדל claude-sonnet-4-6
+  GEMINI_API_KEY      חובה כדי להפעיל את הסיווג. מפתח חינמי מ-
+                      aistudio.google.com — בלי כרטיס אשראי
+  AI_MODEL            ברירת מחדל gemini-2.5-flash
 """
 
 import json
 import os
 import re
 
-MODEL = os.getenv("AI_MODEL", "claude-sonnet-4-6")
+MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
 
 PROMPT = """אתה מסווג אימוני רכיבת אופניים לפי מבנה ההספק שלהם.
 
@@ -70,12 +71,12 @@ def _format_laps(laps):
 
 def classify(laps, log=print):
     """
-    מסווג אימון בעזרת Claude.
+    מסווג אימון בעזרת Gemini.
     מחזיר (kind, work_lap_numbers) או None אם ה-AI לא זמין/נכשל.
       kind: "interval" או "long"
       work_lap_numbers: set של מספרי מקטעים, ריק אם long
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
         return None
 
@@ -84,20 +85,35 @@ def classify(laps, log=print):
         return None
 
     try:
-        import anthropic
+        from google import genai
+        from google.genai import types
     except ImportError:
-        log("  AI: חבילת anthropic לא מותקנת, מדלג")
+        log("  AI: חבילת google-genai לא מותקנת, מדלג")
         return None
 
+    # סכמת JSON מובנית — Gemini מחזיר בדיוק את המבנה הזה, בלי רעש
+    schema = {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["intervals", "steady"]},
+            "work_laps": {"type": "array", "items": {"type": "integer"}},
+            "reason": {"type": "string"},
+        },
+        "required": ["type", "work_laps", "reason"],
+    }
+
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
             model=MODEL,
-            max_tokens=400,
-            messages=[{"role": "user",
-                       "content": PROMPT.replace("{laps}", payload)}],
+            contents=PROMPT.replace("{laps}", payload),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=0,
+            ),
         )
-        text = "".join(b.text for b in resp.content if b.type == "text")
+        text = resp.text or ""
     except Exception as e:
         log(f"  AI: הקריאה נכשלה ({type(e).__name__}), נופל להיוריסטיקה")
         return None
