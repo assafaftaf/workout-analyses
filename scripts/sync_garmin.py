@@ -21,6 +21,8 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
   MIN_LAP_SECONDS     ברירת מחדל 120
   CSV_PATH            ברירת מחדל laps.csv
   DEBUG_LAPS          "1" כדי להדפיס כל lap ואת המקטעים שנבחרו, לצורך ניפוי
+  ANTHROPIC_API_KEY   מפעיל סיווג AI של אימוני אופניים. בלעדיו — היוריסטיקה
+  AI_MODEL            מודל ה-AI, ברירת מחדל claude-sonnet-4-6
 """
 
 import base64
@@ -328,6 +330,35 @@ def fetch_laps(api, activity_id):
     return laps
 
 
+# --------------------------- סיווג ובחירת מקטעים ---------------------------
+
+def classify_bike(name, laps, log):
+    """
+    מחליט אם אימון אופניים הוא interval או long, ובוחר את מקטעי העבודה.
+    מנסה קודם AI (אם מוגדר מפתח), ונופל להיוריסטיקה אם לא זמין או נכשל.
+    מחזיר (kind, work_laps).
+    """
+    try:
+        import classify_ai
+        result = classify_ai.classify(laps, log=log)
+    except ImportError:
+        result = None
+
+    if result is not None:
+        kind, work_nums = result
+        if kind == "long":
+            return "long", []
+        work = [l for l in laps if l["lap"] in work_nums and l["np"]]
+        if work:
+            return "interval", work
+        log("  AI בחר מקטעים ריקים, נופל להיוריסטיקה")
+
+    # היוריסטיקה כגיבוי
+    if not has_intervals(laps):
+        return "long", []
+    return "interval", pick_work_laps(laps)
+
+
 # --------------------------- main ---------------------------
 
 def main():
@@ -348,12 +379,12 @@ def main():
 
         laps = fetch_laps(api, act["activityId"])
 
-        # הסוג נקבע מהמבנה: ריצה תמיד אינטרוולים, אופניים לפי הדפוס.
-        # אימון עם מקטעי עבודה ברורים הוא interval, גם בשבת.
+        # הסוג ומקטעי העבודה נקבעים מהמבנה. ריצה תמיד אינטרוולים;
+        # אופניים דרך AI עם נפילה להיוריסטיקה. היום בשבוע לא משפיע.
         if sport == "run":
-            kind = "interval"
+            kind, work = "interval", pick_run_laps(laps)
         else:
-            kind = "interval" if has_intervals(laps) else "long"
+            kind, work = classify_bike(name, laps, log)
 
         if DEBUG_LAPS:
             log(f"  DEBUG {name} · {sport}/{kind} · כל הלאפים (מקטע: זמן, NP, קצב):")
@@ -361,6 +392,9 @@ def main():
                 log(f"    lap {l['lap']:2d}: {l['seconds']:4d}s  "
                     f"NP={l['np'] if l['np'] is not None else '—'}  "
                     f"pace={l['pace'] if l.get('pace') is not None else '—'}")
+            if kind == "interval":
+                key = "pace" if sport == "run" else "np"
+                log(f"  DEBUG {name} · מקטעי עבודה נבחרו: {[l[key] for l in work]}")
 
         if kind == "long":
             # רכיבה ארוכה: שורת סיכום אחת, בלי פירוק למקטעים
@@ -382,13 +416,6 @@ def main():
             known.add(name)
             log(f"✓ {name} · רכיבה ארוכה · {(secs or 0) // 60} דק׳ · NP {np_val or '—'}W")
             continue
-
-        work = pick_work_laps(laps) if sport == "bike" else pick_run_laps(laps)
-
-        if DEBUG_LAPS:
-            key = "pace" if sport == "run" else "np"
-            log(f"  DEBUG {name} · מקטעי עבודה שנבחרו: "
-                f"{[l[key] for l in work]}")
 
         if not work:
             log(f"· {name} אין מקטעי עבודה, מדלג")
