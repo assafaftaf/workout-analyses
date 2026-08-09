@@ -8,10 +8,10 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
 הסקריפט לא מסווג לאזורים. הוא רושם NP ומשך לכל מקטע,
 והדאשבורד מחשב מזה סף מתעדכן ומסווג לבד.
 
-מה נכנס לאן (הסוג נקבע מהמבנה, לא מהיום):
-  אופניים עם מקטעי עבודה ברורים  ->  interval, מקטעי העבודה בלבד
-  אופניים רציף בלי מקטעים         ->  long, שורת סיכום אחת
-  ריצה                            ->  run, קצב לכל מקטע
+הסקריפט מושך את הנתונים ומעביר אותם ל-Gemini, שמנתח את כל האימון
+ומחזיר סוג, אזור לכל מקטע ואזור סיכום. הסקריפט עצמו לא מסווג.
+  אופניים  ->  Gemini קובע intervals/steady/long ומעשיר כל מקטע באזור
+  ריצה     ->  קצב לכל מקטע (בלי AI, אין הספק)
 
 משתני סביבה:
   GARMIN_TOKENS       base64 של הטוקן מ-garmin_auth.py   (מומלץ)
@@ -21,7 +21,8 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
   MIN_LAP_SECONDS     ברירת מחדל 120
   CSV_PATH            ברירת מחדל laps.csv
   DEBUG_LAPS          "1" כדי להדפיס כל lap ואת המקטעים שנבחרו, לצורך ניפוי
-  GEMINI_API_KEY      מפעיל סיווג AI של אימוני אופניים (חינמי). בלעדיו — היוריסטיקה
+  FTP                 חובה. הסף ש-Gemini משתמש בו לסיווג אזורים. ברירת מחדל 250
+  GEMINI_API_KEY      חובה לסיווג אופניים. מפתח חינמי מ-aistudio.google.com
   AI_MODEL            מודל ה-AI, ברירת מחדל gemini-3-flash
 """
 
@@ -34,7 +35,8 @@ from datetime import date, timedelta
 
 from garminconnect import Garmin
 
-COLS = ["workout", "sport", "kind", "zone", "lap", "secs", "np", "pace", "hr", "cad"]
+COLS = ["workout", "sport", "kind", "zone", "role", "summary_zone",
+        "lap", "secs", "np", "pace", "hr", "cad"]
 RUN_TYPES = {"running", "street_running", "track_running", "trail_running",
              "treadmill_running", "indoor_running", "virtual_run"}
 BIKE_TYPES = {"cycling", "road_biking", "indoor_cycling", "virtual_ride",
@@ -44,6 +46,7 @@ BIKE_TYPES = {"cycling", "road_biking", "indoor_cycling", "virtual_ride",
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "10"))
 MIN_LAP_SECONDS = int(os.getenv("MIN_LAP_SECONDS", "120"))
 CSV_PATH = os.getenv("CSV_PATH", "laps.csv")
+FTP = int(os.getenv("FTP", "250"))
 DEBUG_LAPS = os.getenv("DEBUG_LAPS", "").strip().lower() in ("1", "true", "yes")
 
 # Garmin משנה שמות שדות בין גרסאות, לכן כל מדד מחפש כמה מועמדים
@@ -92,11 +95,13 @@ def parse_laps(splits):
     out = []
     for i, lap in enumerate(splits.get("lapDTOs") or [], 1):
         np_val = pick(lap, LAP_KEYS["np"]) or pick(lap, LAP_KEYS["pwr"])
+        avg_pwr = pick(lap, LAP_KEYS["pwr"])
         hr, cad = pick(lap, LAP_KEYS["hr"]), pick(lap, LAP_KEYS["cad"])
         out.append({
             "lap": i,
             "seconds": int(pick(lap, LAP_KEYS["sec"]) or 0),
             "np": round(np_val) if np_val else None,
+            "avg_power": round(avg_pwr) if avg_pwr else None,
             "pace": pace_of(lap),
             "hr": round(hr) if hr else None,
             "cad": round(cad) if cad else None,
@@ -128,77 +133,6 @@ def fill_missing_np(laps, watts):
         if lap.get("np") is None and end > start:
             lap["np"] = normalized_power(watts[start:end])
     return laps
-
-
-def _kmeans_split(values, iters=25):
-    """
-    מחלק ערכים לשתי קבוצות (עבודה/מנוחה) ב-k-means חד-ממדי.
-    מחזיר את הסף בין הקבוצות, או None אם ההפרדה חלשה מדי.
-    """
-    lo, hi = min(values), max(values)
-    if hi == lo:
-        return None
-    c_lo, c_hi = lo, hi
-    for _ in range(iters):
-        mid = (c_lo + c_hi) / 2
-        low = [v for v in values if v < mid]
-        high = [v for v in values if v >= mid]
-        if not low or not high:
-            return None
-        n_lo, n_hi = sum(low) / len(low), sum(high) / len(high)
-        if abs(n_lo - c_lo) < 0.5 and abs(n_hi - c_hi) < 0.5:
-            c_lo, c_hi = n_lo, n_hi
-            break
-        c_lo, c_hi = n_lo, n_hi
-    # ההפרדה משמעותית רק אם המרכזים רחוקים דיים ביחס לפיזור הכללי
-    if (c_hi - c_lo) < 0.10 * c_hi:
-        return None
-    return (c_lo + c_hi) / 2
-
-
-def pick_work_laps(laps):
-    """
-    מפריד מקטעי עבודה ממנוחות. מכיוון שהמשתמש מלכד כל מקטע ב-lap ידני,
-    המבנה כבר קיים בנתונים — צריך רק לזהות את שתי הרמות.
-
-    האסטרטגיה:
-      1. אם המקטעים מתחלפים חזק-חלש-חזק לסירוגין (דפוס אינטרוולים
-         קלאסי), נבחרים המקטעים ה"חזקים" בסירוגין — עמיד גם כשהפער
-         בין עבודה למנוחה קטן, כמו באימון Z4 שהמנוחות בו אינן קלות.
-      2. אחרת, k-means לשתי קבוצות ובחירת הגבוהה.
-      3. אם אין הפרדה ברורה — כל המקטעים הם עבודה (מאמץ רציף).
-    """
-    usable = [l for l in laps if l["np"] and l["seconds"] >= MIN_LAP_SECONDS]
-    if len(usable) < 2:
-        return usable
-
-    nps = [l["np"] for l in usable]
-
-    # (1) דפוס לסירוגין: כל מקטע גבוה משכניו, או נמוך משניהם
-    highs, lows = [], []
-    for i, l in enumerate(usable):
-        left = usable[i - 1]["np"] if i > 0 else None
-        right = usable[i + 1]["np"] if i < len(usable) - 1 else None
-        neigh = [x for x in (left, right) if x is not None]
-        if all(l["np"] > x for x in neigh):
-            highs.append(l)
-        elif all(l["np"] < x for x in neigh):
-            lows.append(l)
-    # דפוס תקף אם רוב המקטעים משתייכים בבירור לאחת הרמות,
-    # וההפרש בין הרמה הגבוהה לנמוכה משמעותי (לא רעש של מאמץ רציף)
-    if len(highs) >= 2 and lows and len(highs) + len(lows) >= len(usable) - 1:
-        mean_hi = sum(l["np"] for l in highs) / len(highs)
-        mean_lo = sum(l["np"] for l in lows) / len(lows)
-        if mean_hi - mean_lo >= 0.05 * mean_hi:
-            return highs
-
-    # (2) k-means לשתי רמות
-    cut = _kmeans_split(nps)
-    if cut is not None:
-        return [l for l in usable if l["np"] >= cut]
-
-    # (3) מאמץ רציף
-    return usable
 
 
 def pick_run_laps(laps):
@@ -235,20 +169,6 @@ def route(activity):
     if is_bike(activity):
         return "bike"
     return None
-
-
-def has_intervals(laps):
-    """
-    האם באימון יש מבנה של אינטרוולים? נקבע מהנתונים ולא מהיום בשבוע —
-    אימון Z4 בשבת הוא עדיין אינטרוולים. אם pick_work_laps מוצא תת-קבוצה
-    ברורה של מקטעי עבודה (לא כל המקטעים), זה אימון אינטרוולים.
-    """
-    usable = [l for l in laps if l["np"] and l["seconds"] >= MIN_LAP_SECONDS]
-    if len(usable) < 3:
-        return False
-    work = pick_work_laps(laps)
-    # מבנה אינטרוולים = חלק מהמקטעים עבודה, ולפחות שניים כאלה
-    return 2 <= len(work) < len(usable)
 
 
 def pace_of(lap):
@@ -330,33 +250,19 @@ def fetch_laps(api, activity_id):
     return laps
 
 
-# --------------------------- סיווג ובחירת מקטעים ---------------------------
+# --------------------------- ניתוח האימון ---------------------------
 
-def classify_bike(name, laps, log):
+def analyze_workout(name, laps, ftp, log):
     """
-    מחליט אם אימון אופניים הוא interval או long, ובוחר את מקטעי העבודה.
-    מנסה קודם AI (אם מוגדר מפתח), ונופל להיוריסטיקה אם לא זמין או נכשל.
-    מחזיר (kind, work_laps).
+    מנתח אימון אופניים דרך Gemini. מחזיר את הניתוח המלא או None.
+    הסקריפט לא מסווג בעצמו — הכל מגיע מה-AI.
     """
     try:
         import classify_ai
-        result = classify_ai.classify(laps, log=log)
+        return classify_ai.analyze(laps, ftp, log=log)
     except ImportError:
-        result = None
-
-    if result is not None:
-        kind, work_nums = result
-        if kind == "long":
-            return "long", []
-        work = [l for l in laps if l["lap"] in work_nums and l["np"]]
-        if work:
-            return "interval", work
-        log("  AI בחר מקטעים ריקים, נופל להיוריסטיקה")
-
-    # היוריסטיקה כגיבוי
-    if not has_intervals(laps):
-        return "long", []
-    return "interval", pick_work_laps(laps)
+        log("  classify_ai לא נמצא, מדלג על הסיווג")
+        return None
 
 
 # --------------------------- main ---------------------------
@@ -378,26 +284,46 @@ def main():
             continue
 
         laps = fetch_laps(api, act["activityId"])
-
-        # הסוג ומקטעי העבודה נקבעים מהמבנה. ריצה תמיד אינטרוולים;
-        # אופניים דרך AI עם נפילה להיוריסטיקה. היום בשבוע לא משפיע.
-        if sport == "run":
-            kind, work = "interval", pick_run_laps(laps)
-        else:
-            kind, work = classify_bike(name, laps, log)
+        if not laps:
+            log(f"· {name} בלי מקטעים, מדלג")
+            continue
 
         if DEBUG_LAPS:
-            log(f"  DEBUG {name} · {sport}/{kind} · כל הלאפים (מקטע: זמן, NP, קצב):")
+            log(f"  DEBUG {name} · {sport} · כל הלאפים:")
             for l in laps:
                 log(f"    lap {l['lap']:2d}: {l['seconds']:4d}s  "
                     f"NP={l['np'] if l['np'] is not None else '—'}  "
+                    f"hr={l['hr'] or '—'}  cad={l['cad'] or '—'}  "
                     f"pace={l['pace'] if l.get('pace') is not None else '—'}")
-            if kind == "interval":
-                key = "pace" if sport == "run" else "np"
-                log(f"  DEBUG {name} · מקטעי עבודה נבחרו: {[l[key] for l in work]}")
 
-        if kind == "long":
-            # רכיבה ארוכה: שורת סיכום אחת, בלי פירוק למקטעים
+        # --- ריצה: נכתבת כמו קודם, מקטעי הקצב המהירים ---
+        if sport == "run":
+            work = pick_run_laps(laps)
+            if not work:
+                log(f"· {name} ריצה בלי מקטעי עבודה, מדלג")
+                continue
+            for i, lap in enumerate(work, 1):
+                new_rows.append(_row(name, "run", "interval", "", "", "",
+                                     i, lap))
+            known.add(name)
+            best = min(l["pace"] for l in work if l["pace"])
+            log(f"✓ {name} · ריצה · {len(work)} מקטעים · הקצב הטוב "
+                f"{best // 60}:{best % 60:02d}")
+            continue
+
+        # --- אופניים: Gemini מנתח את כל האימון ---
+        result = analyze_workout(name, laps, FTP, log)
+        if result is None:
+            log(f"· {name} הניתוח נכשל (אין מפתח AI או שגיאה), מדלג")
+            continue
+
+        wtype = result["workout_type"]
+        szone = result["summary_zone"]
+        per_lap = result["laps"]
+        log(f"  AI: {wtype} · אזור {szone} · {result['reason']}")
+
+        if wtype == "long":
+            # רכיבה ארוכה: שורת סיכום אחת, כל המקטעים כ-steady
             secs = sum(l["seconds"] for l in laps) or None
             powered = [l for l in laps if l["np"]]
             np_val = (round(sum(l["np"] * l["seconds"] for l in powered)
@@ -405,35 +331,44 @@ def main():
                       if powered and sum(l["seconds"] for l in powered) else None)
             hrs = [l["hr"] for l in laps if l["hr"]]
             cads = [l["cad"] for l in laps if l["cad"]]
-            if not np_val and not hrs:
-                log(f"· {name} רכיבה ארוכה בלי נתונים, מדלג")
-                continue
-            new_rows.append({"workout": name, "sport": "bike", "kind": "long",
-                             "zone": "", "lap": 1, "secs": secs or "",
-                             "np": np_val or "", "pace": "",
-                             "hr": round(sum(hrs) / len(hrs)) if hrs else "",
-                             "cad": round(sum(cads) / len(cads)) if cads else ""})
+            new_rows.append({
+                "workout": name, "sport": "bike", "kind": "long",
+                "zone": szone, "role": "steady", "summary_zone": szone,
+                "lap": 1, "secs": secs or "", "np": np_val or "", "pace": "",
+                "hr": round(sum(hrs) / len(hrs)) if hrs else "",
+                "cad": round(sum(cads) / len(cads)) if cads else ""})
             known.add(name)
-            log(f"✓ {name} · רכיבה ארוכה · {(secs or 0) // 60} דק׳ · NP {np_val or '—'}W")
+            log(f"✓ {name} · רכיבה ארוכה · {(secs or 0) // 60} דק׳ · "
+                f"NP {np_val or '—'}W · {szone}")
             continue
 
+        # intervals או steady: כותבים רק את מקטעי ה-work, מועשרים באזור
+        work = [l for l in laps
+                if per_lap.get(l["lap"], {}).get("role") == "work"]
         if not work:
-            log(f"· {name} אין מקטעי עבודה, מדלג")
+            # אין work — steady/long בלי מאמצים מכוונים. שורת סיכום.
+            secs = sum(l["seconds"] for l in laps) or None
+            powered = [l for l in laps if l["np"]]
+            np_val = (round(sum(l["np"] * l["seconds"] for l in powered)
+                            / sum(l["seconds"] for l in powered))
+                      if powered and sum(l["seconds"] for l in powered) else None)
+            hrs = [l["hr"] for l in laps if l["hr"]]
+            new_rows.append({
+                "workout": name, "sport": "bike", "kind": "long",
+                "zone": szone, "role": "steady", "summary_zone": szone,
+                "lap": 1, "secs": secs or "", "np": np_val or "", "pace": "",
+                "hr": round(sum(hrs) / len(hrs)) if hrs else "", "cad": ""})
+            known.add(name)
+            log(f"✓ {name} · רכיבה רציפה · {szone}")
             continue
 
         for i, lap in enumerate(work, 1):
-            new_rows.append({"workout": name, "sport": sport, "kind": "interval",
-                             "zone": "", "lap": i, "secs": lap["seconds"] or "",
-                             "np": lap["np"] or "", "pace": lap["pace"] or "",
-                             "hr": lap["hr"] or "", "cad": lap["cad"] or ""})
+            zone = per_lap[lap["lap"]]["zone"]
+            new_rows.append(_row(name, "bike", "interval", zone, "work",
+                                 szone, i, lap))
         known.add(name)
-        if sport == "run":
-            best = min(l["pace"] for l in work if l["pace"])
-            log(f"✓ {name} · ריצה · {len(work)} מקטעים · הקצב הטוב "
-                f"{best // 60}:{best % 60:02d}")
-        else:
-            log(f"✓ {name} · אינטרוולים · {len(work)} מקטעים · "
-                f"NP {min(l['np'] for l in work)}-{max(l['np'] for l in work)}W")
+        log(f"✓ {name} · אינטרוולים · {len(work)} מקטעים · "
+            f"NP {min(l['np'] for l in work)}-{max(l['np'] for l in work)}W · {szone}")
 
     if not new_rows:
         log("אין אימונים חדשים")
@@ -443,6 +378,17 @@ def main():
     write_csv(CSV_PATH, merged)
     log(f"נוספו {n} אימונים, {len(new_rows)} שורות")
     return 0
+
+
+def _row(name, sport, kind, zone, role, summary_zone, lap_num, lap):
+    """בונה שורת CSV אחת ממקטע."""
+    return {
+        "workout": name, "sport": sport, "kind": kind,
+        "zone": zone, "role": role, "summary_zone": summary_zone,
+        "lap": lap_num, "secs": lap["seconds"] or "",
+        "np": lap["np"] or "", "pace": lap["pace"] or "",
+        "hr": lap["hr"] or "", "cad": lap["cad"] or "",
+    }
 
 
 if __name__ == "__main__":
