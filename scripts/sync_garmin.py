@@ -21,8 +21,8 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
   MIN_LAP_SECONDS     ברירת מחדל 120
   CSV_PATH            ברירת מחדל laps.csv
   DEBUG_LAPS          "1" כדי להדפיס כל lap ואת המקטעים שנבחרו, לצורך ניפוי
-  ANTHROPIC_API_KEY   מפעיל סיווג AI של אימוני אופניים. בלעדיו — היוריסטיקה
-  AI_MODEL            מודל ה-AI, ברירת מחדל claude-sonnet-4-6
+  GEMINI_API_KEY      מפעיל סיווג AI של אימוני אופניים (חינמי). בלעדיו — היוריסטיקה
+  AI_MODEL            מודל ה-AI, ברירת מחדל gemini-3-flash
 """
 
 import base64
