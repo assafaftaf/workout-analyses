@@ -10,7 +10,7 @@
 משתני סביבה:
   GEMINI_API_KEY      חובה. מפתח חינמי מ-aistudio.google.com, בלי כרטיס אשראי
   FTP                 חובה לסיווג אזורים. ברירת מחדל 250
-  AI_MODEL            ברירת מחדל gemini-3-flash
+  AI_MODEL            ברירת מחדל gemini-2.5-flash
 """
 
 import json
@@ -81,7 +81,20 @@ lap 3: 1500s NP=175W avg=170W hr=137 cad=83
 {{"workout_type": "long", "summary_zone": "Z3", "laps": [{{"lap": 1, "zone": "Z3", "role": "steady"}}, {{"lap": 2, "zone": "Z3", "role": "steady"}}, {{"lap": 3, "zone": "Z3", "role": "steady"}}], "reason": "רכיבה ארוכה רציפה של כ-95 דקות בהספק טמפו אחיד, לחיצות lap אך בלי דפוס אינטרוולים"}}
 
 ## עכשיו נתח את האימון הבא (FTP {ftp})
-{laps}"""
+{laps}
+## עכשיו סווג את האימון הבא
+שים לב שיש PATTERN מסויים לאימונים
+הוא יכול להשתנות אבל זה מה שבדרך כלל קורה
+ראשון RECOVERY
+שני BIKE Z4
+שלישי ריצת איכות
+רביעי BIKE Z3
+חמישי BIKE Z2
+שישי ריצה ארוכה
+שבת רכיבה ארוכה 
+אימונים כמו חדר כושר ושחייה נכנסים באופן לא מתוזמן בכל ימות השבוע
+
+"""
 
 
 VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5", "Z6"}
@@ -131,10 +144,13 @@ def analyze(laps, ftp, log=print):
     """
     api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
+        log("  AI: אין GEMINI_API_KEY בסביבה — ה-secret לא הוגדר או לא הועבר ל-workflow")
         return None
+    log(f"  AI: משתמש במפתח (מסתיים ב-…{api_key[-4:]}) ומודל {MODEL}")
 
     payload = _format_laps(laps)
     if not payload:
+        log("  AI: אין נתוני הספק במקטעים, מדלג")
         return None
 
     try:
@@ -181,7 +197,11 @@ def analyze(laps, ftp, log=print):
         )
         text = resp.text or ""
     except Exception as e:
-        log(f"  AI: הקריאה נכשלה ({type(e).__name__}), מדלג")
+        msg = str(e)
+        # מקצר הודעות ארוכות אבל שומר את החלק המזהה
+        if len(msg) > 200:
+            msg = msg[:200] + "…"
+        log(f"  AI: הקריאה נכשלה — {type(e).__name__}: {msg}")
         return None
 
     data = _extract_json(text)
