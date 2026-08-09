@@ -46,7 +46,7 @@ BIKE_TYPES = {"cycling", "road_biking", "indoor_cycling", "virtual_ride",
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "10"))
 MIN_LAP_SECONDS = int(os.getenv("MIN_LAP_SECONDS", "120"))
 CSV_PATH = os.getenv("CSV_PATH", "laps.csv")
-FTP = int(os.getenv("FTP", "250"))
+FTP = int(os.getenv("FTP", "292"))
 DEBUG_LAPS = os.getenv("DEBUG_LAPS", "").strip().lower() in ("1", "true", "yes")
 
 # Garmin משנה שמות שדות בין גרסאות, לכן כל מדד מחפש כמה מועמדים
