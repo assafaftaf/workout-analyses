@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-סיווג אימון בעזרת Gemini (ה-API החינמי של גוגל).
+ניתוח אימון בעזרת Gemini (ה-API החינמי של גוגל).
 
-ה-AI מקבל רק את מבנה האימון — משך ו-NP לכל מקטע — ומחזיר JSON
-עם סוג האימון ואילו מקטעים הם עבודה. הוא לא ממציא נתונים: כל
-המספרים כבר קיימים, ה-AI רק מזהה את המבנה.
+הסקריפט לא מסווג כלום בעצמו. הוא מעביר ל-Gemini את כל נתוני האימון
+ואת ה-FTP של המשתמש, ו-Gemini מחזיר טבלה מלאה ומועשרת:
+  - לכל מקטע: סוג (work/rest/warmup/cooldown/steady) ואזור (Z1..Z6)
+  - סיכום לאימון: סוג האימון ואזור דומיננטי אחד
 
 משתני סביבה:
-  GEMINI_API_KEY      חובה כדי להפעיל את הסיווג. מפתח חינמי מ-
-                      aistudio.google.com — בלי כרטיס אשראי
+  GEMINI_API_KEY      חובה. מפתח חינמי מ-aistudio.google.com, בלי כרטיס אשראי
+  FTP                 חובה לסיווג אזורים. ברירת מחדל 250
   AI_MODEL            ברירת מחדל gemini-3-flash
 """
 
@@ -18,73 +19,77 @@ import re
 
 MODEL = os.getenv("AI_MODEL", "gemini-3-flash")
 
-PROMPT = """אתה מומחה לניתוח אימוני רכיבת אופניים. משימתך: לקרוא את מבנה ההספק של אימון ולזהות אילו מקטעים הם מאמצי העבודה המכוונים.
+# תצוגות הדאשבורד — אזורי Coggan קיצוניים ממופים פנימה
+VIEW_OF_ZONE = {"Z1": "Z2", "Z2": "Z2", "Z3": "Z3", "Z4": "Z4",
+                "Z5": "Z4", "Z6": "Z4"}
+
+PROMPT = """אתה מאמן רכיבת אופניים שמנתח נתוני אימון ומסווג אותם.
 
 ## הקלט
-אימון מחולק למקטעים (laps). לכל מקטע: מספר, משך בשניות, ו-NP (Normalized Power) בוואט. הרוכב מלכד ידנית כל מקטע, לכן כל מקטע הוא יחידה מכוונת אחת — התחלה וסוף שהרוכב בחר. זו רמז חזק: מעבר בין מקטעים כמעט תמיד מסמן מעבר בין עבודה למנוחה.
+אימון מחולק למקטעים (laps). לכל מקטע נתונים: מספר, משך בשניות, NP (Normalized Power) בוואט, הספק ממוצע, דופק ממוצע וקדנס. הרוכב מלכד ידנית כל מקטע — אבל **עצם הלחיצה על lap לא אומרת שזה אימון אינטרוולים.** רוכב לוחץ lap גם ברכיבה רגילה (למשל בכל עלייה, או סתם לסימון). שפוט לפי המבנה בפועל, לא לפי מספר הלחיצות.
 
-## איך לחשוב (בצע לפי הסדר)
-1. סרוק את ערכי ה-NP וזהה את הרמות שקיימות. באימון אינטרוולים יש בדרך כלל שתי רמות ברורות: "עבודה" (גבוה) ו"התאוששות" (נמוך). לפעמים יש שלוש (חימום נמוך מאוד, התאוששות בינונית, עבודה גבוהה).
-2. חפש חזרתיות. מקטעי עבודה נוטים להיות בעלי NP דומה זה לזה (למשל 275-290W שוב ושוב). זהה את הקבוצה החוזרת בעלת ה-NP הגבוה — אלה כמעט תמיד מאמצי העבודה.
-3. סנן חימום ושחרור. המקטע הראשון ארוך ובעל NP נמוך → חימום, לא עבודה. מקטע אחרון קצר/נמוך → שחרור, לא עבודה.
-4. הכרע לגבי הסוג לפי מה שמצאת.
+ה-FTP של הרוכב: {ftp} וואט. השתמש בו לסיווג האזורים.
 
-## סוגי אימון
-- "intervals" — קיימת קבוצת מאמצים חוזרת ובולטת מעל שאר המקטעים. הדפוסים האפשריים:
-  • קלאסי מתחלף: עבודה-מנוחה-עבודה-מנוחה
-  • בלוקים: כמה מקטעי עבודה ברצף ואז מנוחה (למשל 4 מקטעים גבוהים סמוכים)
-  • over-under: זוגות מאמצים סמוכים (קצת מעל הסף, קצת מתחת) עם התאוששות ביניהם — כל המקטעים ה"מעל" וה"מתחת" הם עבודה
-  • פירמידה: המאמצים עולים ואז יורדים בעוצמה
-  • ספרינטים: מקטעי עבודה קצרים מאוד (פחות מדקה) בעלי NP גבוה מאוד
-- "steady" — אין קבוצת מאמצים בולטת. כל המקטעים באותה רמה בערך (הפרש קטן, בלי דפוס חזרתי של גבוה-נמוך). רכיבת בסיס, טמפו רציף, יציאה ארוכה.
+## אזורי הספק (Coggan), כאחוז מה-FTP
+- Z1 התאוששות: עד 55%
+- Z2 אירובי: 56-75%
+- Z3 טמפו: 76-90%
+- Z4 סף: 91-105%
+- Z5 VO2max: 106-120%
+- Z6 אנאירובי: מעל 120%
 
-## כללים חשובים
-- **פער קטן הוא עדיין אינטרוולים.** באימון סף גם ההתאוששות עשויה להיות ברמה גבוהה (למשל עבודה 285W מול "מנוחה" 210W). אם יש דפוס חזרתי ברור של גבוה-נמוך, זה intervals — גם אם ההפרש רק 15-20%.
-- **אל תכלול מנוחות בעבודה,** גם אם ה-NP שלהן לא נמוך. ההבחנה היא הרמה היחסית בתוך האימון, לא ערך מוחלט.
-- **בספק — העדף לזהות intervals.** אם יש קבוצת מאמצים שנראית מכוונת, בחר בה. steady שמור למקרים שבהם באמת אין הפרדה.
-- work_laps מכיל את מספרי המקטעים של העבודה בלבד, ממוינים.
+## מה להחזיר לכל מקטע
+- zone: אזור ה-Coggan לפי ה-NP של המקטע ביחס ל-FTP
+- role: התפקיד של המקטע באימון —
+  • "work" — מאמץ עבודה מכוון
+  • "rest" — התאוששות בין מאמצים
+  • "warmup" — חימום בתחילת האימון
+  • "cooldown" — שחרור בסוף
+  • "steady" — מקטע ברכיבה רציפה שאינה אינטרוולים
+
+## מה להחזיר לאימון כולו
+- workout_type: "intervals" אם יש קבוצת מאמצי work חוזרת ובולטת; "steady" אם המאמץ אחיד לכל האורך בלי דפוס עבודה-מנוחה; "long" אם זו רכיבה ארוכה רציפה (מעל שעה, אירובית ברובה).
+- summary_zone: האזור הדומיננטי של האימון — האזור שבו הרוכב בילה הכי הרבה זמן במקטעי work (או בכלל המקטעים אם steady/long). ערך יחיד מ-Z1 עד Z6.
+
+## איך להחליט על workout_type (חשוב!)
+- **לחיצות lap אינן ראיה לאינטרוולים.** בדוק אם באמת יש קבוצת מאמצים חוזרת בעלת NP גבוה משמעותית מהשאר.
+- intervals: יש 2+ מקטעי work בעלי NP דומה זה לזה ובולט מעל מקטעי ה-rest. דפוסים: מתחלף, בלוקים, over-under, פירמידה, ספרינטים.
+- steady/long: כל המקטעים באותה רמה בערך, בלי קבוצת מאמצים בולטת. רכיבת שבת ארוכה שבה לחצת lap כל כמה ק״מ אבל ההספק אחיד — זו long, לא intervals. אם משך האימון ארוך (מעל שעה) וההספק אירובי — long.
+- **פער קטן הוא עדיין intervals** אם יש דפוס חזרתי ברור (אימון סף: work 285W מול rest 210W).
 
 ## פורמט הפלט
 JSON בלבד, בלי טקסט לפניו או אחריו:
-{"type": "intervals" או "steady", "work_laps": [מספרי מקטעי העבודה], "reason": "משפט קצר בעברית"}
-אם steady — work_laps ריק [].
+{{"workout_type": "intervals/steady/long", "summary_zone": "Z1..Z6", "laps": [{{"lap": מספר, "zone": "Z1..Z6", "role": "work/rest/warmup/cooldown/steady"}}, ...], "reason": "משפט קצר בעברית"}}
+
+חובה: מערך laps חייב להכיל רשומה לכל מקטע בקלט, באותו סדר.
 
 ## דוגמאות
 
-קלט: lap 1: 590s 145W, lap 2: 228s 285W, lap 3: 305s 140W, lap 4: 226s 278W, lap 5: 299s 135W, lap 6: 228s 278W, lap 7: 246s 146W, lap 8: 221s 280W, lap 9: 296s 117W, lap 10: 249s 276W, lap 11: 236s 125W, lap 12: 282s 290W, lap 13: 248s 189W
-פלט: {"type": "intervals", "work_laps": [2, 4, 6, 8, 10, 12], "reason": "חימום במקטע 1, שישה מאמצים חוזרים של 276-290W המתחלפים עם התאוששות של ~130W, ושחרור בסוף"}
+קלט (FTP 250):
+lap 1: 590s NP=145W avg=140W hr=118 cad=82
+lap 2: 228s NP=285W avg=280W hr=150 cad=91
+lap 3: 305s NP=140W avg=135W hr=125 cad=80
+lap 4: 226s NP=278W avg=275W hr=152 cad=90
+פלט:
+{{"workout_type": "intervals", "summary_zone": "Z5", "laps": [{{"lap": 1, "zone": "Z2", "role": "warmup"}}, {{"lap": 2, "zone": "Z5", "role": "work"}}, {{"lap": 3, "zone": "Z2", "role": "rest"}}, {{"lap": 4, "zone": "Z5", "role": "work"}}], "reason": "חימום ואז שני מאמצי VO2max סביב 280W עם התאוששות ביניהם"}}
 
-קלט: lap 1: 600s 175W, lap 2: 600s 178W, lap 3: 600s 174W, lap 4: 600s 176W
-פלט: {"type": "steady", "work_laps": [], "reason": "מאמץ אחיד סביב 175W לכל האורך, בלי דפוס גבוה-נמוך"}
+קלט (FTP 250):
+lap 1: 1800s NP=178W avg=172W hr=138 cad=84
+lap 2: 2400s NP=182W avg=176W hr=141 cad=85
+lap 3: 1500s NP=175W avg=170W hr=137 cad=83
+פלט:
+{{"workout_type": "long", "summary_zone": "Z3", "laps": [{{"lap": 1, "zone": "Z3", "role": "steady"}}, {{"lap": 2, "zone": "Z3", "role": "steady"}}, {{"lap": 3, "zone": "Z3", "role": "steady"}}], "reason": "רכיבה ארוכה רציפה של כ-95 דקות בהספק טמפו אחיד, לחיצות lap אך בלי דפוס אינטרוולים"}}
 
-קלט: lap 1: 400s 150W, lap 2: 300s 250W, lap 3: 120s 255W, lap 4: 200s 150W, lap 5: 300s 252W, lap 6: 120s 258W
-פלט: {"type": "intervals", "work_laps": [2, 3, 5, 6], "reason": "over-under: זוגות מאמצים סמוכים 250-258W עם התאוששות 150W ביניהם"}
-
-קלט: lap 1: 300s 160W, lap 2: 240s 288W, lap 3: 240s 285W, lap 4: 240s 290W, lap 5: 240s 286W, lap 6: 400s 155W
-פלט: {"type": "intervals", "work_laps": [2, 3, 4, 5], "reason": "בלוק של ארבעה מאמצים רצופים סביב 287W, עם חימום לפני ושחרור אחרי"}
-
-קלט: lap 1: 500s 210W, lap 2: 240s 300W, lap 3: 300s 205W, lap 4: 240s 305W, lap 5: 300s 208W, lap 6: 240s 298W
-פלט: {"type": "intervals", "work_laps": [2, 4, 6], "reason": "שלושה מאמצי סף 298-305W עם התאוששות ברמה גבוהה יחסית 205-210W — הדפוס החזרתי ברור למרות הפער הקטן"}
-
-## עכשיו סווג את האימון הבא
-
-
-שים לב שיש PATTERN מסויים לאימונים
-הוא יכול להשתנות אבל זה מה שבדרך כלל קורה
-ראשון RECOVERY
-שני BIKE Z4
-שלישי ריצת איכות
-רביעי BIKE Z3
-חמישי BIKE Z2
-שישי ריצה ארוכה
-שבת רכיבה ארוכה 
-אימונים כמו חדר כושר ושחייה נכנסים באופן לא מתוזמן בכל ימות השבוע
-
+## עכשיו נתח את האימון הבא (FTP {ftp})
 {laps}"""
 
 
+VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5", "Z6"}
+VALID_ROLES = {"work", "rest", "warmup", "cooldown", "steady"}
+VALID_TYPES = {"intervals", "steady", "long"}
+
+
 def _extract_json(text):
-    """שולף את אובייקט ה-JSON הראשון מהתשובה, גם אם יש רעש סביבו."""
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
         return None
@@ -95,17 +100,34 @@ def _extract_json(text):
 
 
 def _format_laps(laps):
-    return ", ".join(
-        f"lap {l['lap']}: {l['seconds']}s {l['np']}W"
-        for l in laps if l.get("np") and l.get("seconds"))
+    lines = []
+    for l in laps:
+        parts = [f"lap {l['lap']}: {l.get('seconds', 0)}s"]
+        if l.get("np"):
+            parts.append(f"NP={l['np']}W")
+        if l.get("avg_power"):
+            parts.append(f"avg={l['avg_power']}W")
+        if l.get("hr"):
+            parts.append(f"hr={l['hr']}")
+        if l.get("cad"):
+            parts.append(f"cad={l['cad']}")
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
 
 
-def classify(laps, log=print):
+def analyze(laps, ftp, log=print):
     """
-    מסווג אימון בעזרת Gemini.
-    מחזיר (kind, work_lap_numbers) או None אם ה-AI לא זמין/נכשל.
-      kind: "interval" או "long"
-      work_lap_numbers: set של מספרי מקטעים, ריק אם long
+    שולח את האימון ל-Gemini ומחזיר את הניתוח המלא, או None אם נכשל.
+
+    מחזיר dict:
+      {
+        "workout_type": "intervals"/"steady"/"long",
+        "summary_zone": "Z1..Z6",
+        "view": "Z2"/"Z3"/"Z4",       # התצוגה בדאשבורד
+        "laps": {lap_number: {"zone": ..., "role": ...}},
+        "reason": "..."
+      }
+    או None אם אין מפתח / החבילה חסרה / הקריאה נכשלה / התשובה פגומה.
     """
     api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
@@ -122,22 +144,35 @@ def classify(laps, log=print):
         log("  AI: חבילת google-genai לא מותקנת, מדלג")
         return None
 
-    # סכמת JSON מובנית — Gemini מחזיר בדיוק את המבנה הזה, בלי רעש
     schema = {
         "type": "object",
         "properties": {
-            "type": {"type": "string", "enum": ["intervals", "steady"]},
-            "work_laps": {"type": "array", "items": {"type": "integer"}},
+            "workout_type": {"type": "string", "enum": list(VALID_TYPES)},
+            "summary_zone": {"type": "string", "enum": list(VALID_ZONES)},
+            "laps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "lap": {"type": "integer"},
+                        "zone": {"type": "string", "enum": list(VALID_ZONES)},
+                        "role": {"type": "string", "enum": list(VALID_ROLES)},
+                    },
+                    "required": ["lap", "zone", "role"],
+                },
+            },
             "reason": {"type": "string"},
         },
-        "required": ["type", "work_laps", "reason"],
+        "required": ["workout_type", "summary_zone", "laps", "reason"],
     }
+
+    prompt = PROMPT.replace("{ftp}", str(ftp)).replace("{laps}", payload)
 
     try:
         client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
             model=MODEL,
-            contents=PROMPT.replace("{laps}", payload),
+            contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=schema,
@@ -146,30 +181,51 @@ def classify(laps, log=print):
         )
         text = resp.text or ""
     except Exception as e:
-        log(f"  AI: הקריאה נכשלה ({type(e).__name__}), נופל להיוריסטיקה")
+        log(f"  AI: הקריאה נכשלה ({type(e).__name__}), מדלג")
         return None
 
     data = _extract_json(text)
-    if not data or "type" not in data:
-        log("  AI: תשובה לא תקינה, נופל להיוריסטיקה")
+    if not data:
+        log("  AI: תשובה לא תקינה, מדלג")
         return None
 
-    if data["type"] == "steady":
-        log(f"  AI: רכיבה רציפה — {data.get('reason', '')}")
-        return "long", set()
+    return _normalize(data, laps, log)
 
-    work = data.get("work_laps") or []
-    if not isinstance(work, list) or not work:
-        log("  AI: סיווג intervals בלי מקטעי עבודה, נופל להיוריסטיקה")
+
+def _normalize(data, laps, log):
+    """מאמת את תשובת ה-AI וממיר למבנה שהסקריפט צורך."""
+    wtype = data.get("workout_type")
+    szone = data.get("summary_zone")
+    ai_laps = data.get("laps")
+
+    if wtype not in VALID_TYPES or szone not in VALID_ZONES:
+        log("  AI: סוג או אזור לא תקינים, מדלג")
+        return None
+    if not isinstance(ai_laps, list) or not ai_laps:
+        log("  AI: חסר פירוט מקטעים, מדלג")
         return None
 
-    try:
-        work_nums = {int(n) for n in work}
-    except (TypeError, ValueError):
-        log("  AI: מספרי מקטעים לא תקינים, נופל להיוריסטיקה")
+    per_lap = {}
+    for entry in ai_laps:
+        try:
+            num = int(entry["lap"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        zone = entry.get("zone")
+        role = entry.get("role")
+        if zone in VALID_ZONES and role in VALID_ROLES:
+            per_lap[num] = {"zone": zone, "role": role}
+
+    # ודא שכל מקטע קלט קיבל תשובה
+    missing = [l["lap"] for l in laps if l["lap"] not in per_lap]
+    if missing:
+        log(f"  AI: חסרים מקטעים בתשובה {missing}, מדלג")
         return None
 
-    log(f"  AI: אינטרוולים, מקטעי עבודה {sorted(work_nums)} — "
-        f"{data.get('reason', '')}")
-    return "interval", work_nums
- 
+    return {
+        "workout_type": wtype,
+        "summary_zone": szone,
+        "view": VIEW_OF_ZONE[szone],
+        "laps": per_lap,
+        "reason": data.get("reason", ""),
+    }
