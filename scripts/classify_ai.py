@@ -17,7 +17,7 @@ import json
 import os
 import re
 
-MODEL = os.getenv("AI_MODEL", "gemini-3-flash")
+MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
 
 # תצוגות הדאשבורד — אזורי Coggan קיצוניים ממופים פנימה
 VIEW_OF_ZONE = {"Z1": "Z2", "Z2": "Z2", "Z3": "Z3", "Z4": "Z4",
