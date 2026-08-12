@@ -58,6 +58,7 @@ jobs:
           MIDWEEK_DAYS: ${{ vars.MIDWEEK_DAYS || '1,2,3' }}
           LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
           MIN_LAP_SECONDS: ${{ vars.MIN_LAP_SECONDS || '120' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/sync_garmin.py | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: דחיפת השינויים
