@@ -10,14 +10,14 @@
 משתני סביבה:
   GEMINI_API_KEY      חובה. מפתח חינמי מ-aistudio.google.com, בלי כרטיס אשראי
   FTP                 חובה לסיווג אזורים. ברירת מחדל 250
-  AI_MODEL            ברירת מחדל gemini-2.5-flash
+  AI_MODEL            ברירת מחדל gemini-3.6-flash
 """
 
 import json
 import os
 import re
 
-MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("AI_MODEL", "gemini-3.6-flash")
 
 # תצוגות הדאשבורד — אזורי Coggan קיצוניים ממופים פנימה
 VIEW_OF_ZONE = {"Z1": "Z2", "Z2": "Z2", "Z3": "Z3", "Z4": "Z4",
