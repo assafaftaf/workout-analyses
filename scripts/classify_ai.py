@@ -81,20 +81,7 @@ lap 3: 1500s NP=175W avg=170W hr=137 cad=83
 {{"workout_type": "long", "summary_zone": "Z3", "laps": [{{"lap": 1, "zone": "Z3", "role": "steady"}}, {{"lap": 2, "zone": "Z3", "role": "steady"}}, {{"lap": 3, "zone": "Z3", "role": "steady"}}], "reason": "רכיבה ארוכה רציפה של כ-95 דקות בהספק טמפו אחיד, לחיצות lap אך בלי דפוס אינטרוולים"}}
 
 ## עכשיו נתח את האימון הבא (FTP {ftp})
-{laps}
-## עכשיו סווג את האימון הבא
-שים לב שיש PATTERN מסויים לאימונים
-הוא יכול להשתנות אבל זה מה שבדרך כלל קורה
-ראשון RECOVERY
-שני BIKE Z4
-שלישי ריצת איכות
-רביעי BIKE Z3
-חמישי BIKE Z2
-שישי ריצה ארוכה
-שבת רכיבה ארוכה 
-אימונים כמו חדר כושר ושחייה נכנסים באופן לא מתוזמן בכל ימות השבוע
-
-"""
+{laps}"""
 
 
 VALID_ZONES = {"Z1", "Z2", "Z3", "Z4", "Z5", "Z6"}
@@ -249,3 +236,4 @@ def _normalize(data, laps, log):
         "laps": per_lap,
         "reason": data.get("reason", ""),
     }
+
