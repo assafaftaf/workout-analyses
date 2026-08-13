@@ -73,8 +73,8 @@ jobs:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          AI_MODEL: ${{ vars.AI_MODEL || 'gemini-2.5-flash' }}
-          FTP: ${{ vars.FTP || '250' }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'gemini-3.6-flash' }}
+          FTP: ${{ vars.FTP || '295' }}
           LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
           MIN_LAP_SECONDS: ${{ vars.MIN_LAP_SECONDS || '120' }}
           DEBUG_LAPS: ${{ inputs.debug && '1' || '' }}
