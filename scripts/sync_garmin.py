@@ -23,7 +23,7 @@ Garmin מחזיר NP לכל מקטע ישירות — אותו ערך שמופי
   DEBUG_LAPS          "1" כדי להדפיס כל lap ואת המקטעים שנבחרו, לצורך ניפוי
   FTP                 חובה. הסף ש-Gemini משתמש בו לסיווג אזורים. ברירת מחדל 250
   GEMINI_API_KEY      חובה לסיווג אופניים. מפתח חינמי מ-aistudio.google.com
-  AI_MODEL            מודל ה-AI, ברירת מחדל gemini-3-flash
+  AI_MODEL            מודל ה-AI, ברירת מחדל gemini-2.5-flash
 """
 
 import base64
@@ -46,7 +46,7 @@ BIKE_TYPES = {"cycling", "road_biking", "indoor_cycling", "virtual_ride",
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "10"))
 MIN_LAP_SECONDS = int(os.getenv("MIN_LAP_SECONDS", "120"))
 CSV_PATH = os.getenv("CSV_PATH", "laps.csv")
-FTP = int(os.getenv("FTP", "292"))
+FTP = int(os.getenv("FTP", "250"))
 DEBUG_LAPS = os.getenv("DEBUG_LAPS", "").strip().lower() in ("1", "true", "yes")
 
 # Garmin משנה שמות שדות בין גרסאות, לכן כל מדד מחפש כמה מועמדים
@@ -208,10 +208,27 @@ def write_csv(path, rows):
 # --------------------------- Garmin ---------------------------
 
 def connect():
-    """מתחבר בעזרת הטוקן, ונופל לאימייל וסיסמה רק אם אין ברירה."""
-    blob = os.getenv("GARMIN_TOKENS", "").strip()
+    """
+    מתחבר ל-Garmin. סדר העדיפויות:
+      1. טוקן טרי שנוצר בהרצה הנוכחית ע"י garmin_login.py
+      2. טוקן שמור מ-GARMIN_TOKENS
+      3. אימייל וסיסמה
+    """
+    token_dir = os.getenv("GARMIN_TOKEN_DIR",
+                          os.path.expanduser("~/.garminconnect"))
+    fresh = os.path.join(token_dir, "tokens.json")
     email, password = os.getenv("GARMIN_EMAIL"), os.getenv("GARMIN_PASSWORD")
 
+    if os.path.exists(fresh):
+        try:
+            api = Garmin()
+            api.login(tokenstore=fresh)
+            log("מחובר לפי הטוקן שנוצר בהרצה הזו")
+            return api
+        except Exception as e:
+            log(f"הטוקן הטרי לא התקבל ({type(e).__name__}), ממשיך")
+
+    blob = os.getenv("GARMIN_TOKENS", "").strip()
     if blob:
         path = os.path.join(tempfile.mkdtemp(), "garmin_tokens.json")
         with open(path, "w", encoding="utf-8") as f:
@@ -225,8 +242,7 @@ def connect():
             log(f"הטוקן לא התקבל ({type(e).__name__}), מנסה אימייל וסיסמה")
 
     if not (email and password):
-        sys.exit("אין טוקן תקף ואין GARMIN_EMAIL/GARMIN_PASSWORD. "
-                 "הרץ scripts/garmin_auth.py ועדכן את GARMIN_TOKENS.")
+        sys.exit("אין טוקן תקף ואין GARMIN_EMAIL/GARMIN_PASSWORD.")
     api = Garmin(email, password)
     api.login()
     log("מחובר לפי אימייל וסיסמה")
