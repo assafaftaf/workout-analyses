@@ -2,6 +2,7 @@ name: Sync Garmin
 
 # 8:00 בישראל כל יום. GitHub מריץ ב-UTC בלבד וישראל מחליפה שעון,
 # לכן יש שתי הרצות והשלב הראשון עוצר את זו שאינה 8:00 מקומית.
+# בכל הרצה נוצר טוקן Garmin טרי, כדי שלא נסתמך על טוקן שפג תוקפו.
 on:
   schedule:
     - cron: "0 5 * * *"   # 8:00 בשעון קיץ
@@ -12,6 +13,11 @@ on:
         description: "כמה ימים אחורה לסרוק"
         required: false
         default: "10"
+      debug:
+        description: "הדפסת כל lap לצורך ניפוי"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -23,6 +29,8 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      GARMIN_TOKEN_DIR: ${{ github.workspace }}/.garmin
     steps:
       - name: בדיקת שעה מקומית
         id: clock
@@ -49,17 +57,32 @@ jobs:
         if: steps.clock.outputs.run == 'true'
         run: pip install -r scripts/requirements.txt
 
+      - name: יצירת טוקן Garmin טרי
+        if: steps.clock.outputs.run == 'true'
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GARMIN_MFA: ${{ secrets.GARMIN_MFA }}
+          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+        run: python scripts/garmin_login.py
+
       - name: משיכת אימונים מ-Garmin
         if: steps.clock.outputs.run == 'true'
         env:
           GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
-          MIDWEEK_DAYS: ${{ vars.MIDWEEK_DAYS || '1,2,3' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'gemini-2.5-flash' }}
+          FTP: ${{ vars.FTP || '250' }}
           LOOKBACK_DAYS: ${{ inputs.lookback_days || '10' }}
           MIN_LAP_SECONDS: ${{ vars.MIN_LAP_SECONDS || '120' }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEBUG_LAPS: ${{ inputs.debug && '1' || '' }}
         run: python scripts/sync_garmin.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: מחיקת הטוקן מהריצה
+        if: always()
+        run: rm -rf "${{ github.workspace }}/.garmin"
 
       - name: דחיפת השינויים
         if: steps.clock.outputs.run == 'true'
@@ -71,5 +94,5 @@ jobs:
           git config user.name "garmin-sync[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add laps.csv
-          git commit -m "sync: אימוני אמצע שבוע $(TZ=Asia/Jerusalem date +%F)"
+          git commit -m "sync: אימונים $(TZ=Asia/Jerusalem date +%F)"
           git push
