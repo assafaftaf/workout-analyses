@@ -112,6 +112,10 @@ workout,sport,kind,zone,role,summary_zone,lap,secs,np,pace,hr,cad
 2026-08-17,bike,interval,Z4,work,Z4,5,240,296,106,153,86
 2026-08-17,bike,interval,Z4,work,Z4,6,243,290,111,145,84
 2026-08-18,run,interval,,,,1,1647,281,382,118,160
+2026-08-19,bike,interval,Z3,work,Z3,1,606,255,105,,85
+2026-08-19,bike,interval,Z3,work,Z3,2,599,254,104,,83
+2026-08-19,bike,interval,Z3,work,Z3,3,586,252,107,,83
+2026-08-19,bike,interval,Z3,work,Z3,4,572,254,109,,82
 2026-08-20,bike,interval,Z3,work,Z3,1,895,235,95,153,83
 2026-08-20,bike,interval,Z3,work,Z3,2,895,235,154,159,84
 2026-08-20,bike,interval,Z3,work,Z3,3,895,235,298,164,83
