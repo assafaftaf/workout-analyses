@@ -153,6 +153,29 @@ def inject(zone):
       }}
       .lt-sec::after {{ content: ""; flex: 1; height: 1px; background: {t['line']}; }}
 
+      .lt-desc {{
+        direction: rtl; font-size: .82rem; color: {t['muted']};
+        line-height: 1.5; margin: -.3rem 0 1rem;
+      }}
+
+      /* ---------- תובנות ---------- */
+      .lt-ins {{
+        display: flex; flex-direction: column; gap: 1px;
+        background: {t['line']}; border: 1px solid {t['line']};
+        direction: rtl; margin: 0 0 1.4rem;
+      }}
+      .lt-ins-item {{
+        background: {t['surface']}; padding: .7rem 1rem;
+        font-size: .85rem; line-height: 1.5; display: flex; gap: .6rem;
+      }}
+      .lt-ins-item::before {{
+        content: ""; width: 6px; height: 6px; border-radius: 50%;
+        flex: none; margin-top: .5rem;
+      }}
+      .lt-ins-item.good::before {{ background: {t['accent']}; }}
+      .lt-ins-item.bad::before {{ background: #FF6B6B; }}
+      .lt-ins-item.info::before {{ background: {t['faint']}; }}
+
       /* ---------- רכיבי Streamlit ---------- */
       div[data-testid="stExpander"] {{
         border: 1px solid {t['line']}; background: {t['surface']}; border-radius: 0;
@@ -249,8 +272,21 @@ def readout(zone, items):
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
-def section(zone, title):
+def section(zone, title, desc=None):
     st.markdown(f'<div class="lt-sec">{title}</div>', unsafe_allow_html=True)
+    if desc:
+        st.markdown(f'<div class="lt-desc">{desc}</div>', unsafe_allow_html=True)
+
+
+def insights(zone, items):
+    """items: רשימת (kind, text), kind אחד מתוך good/bad/info (ר' insights.py)."""
+    if not items:
+        return
+    html = ['<div class="lt-ins">']
+    for kind, text in items:
+        html.append(f'<div class="lt-ins-item {kind}">{text}</div>')
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------
