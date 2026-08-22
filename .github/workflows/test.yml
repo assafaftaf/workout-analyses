@@ -1,0 +1,27 @@
+name: Test
+
+# בדיקת עשן: טוענת את כל חמש התצוגות ב-app.py ומוודאת שאין exception.
+# רץ על כל push/PR ל-main, כדי לתפוס לפני Streamlit Cloud מקרים כמו
+# פונקציה שנקראת מ-app.py אך לא הוגדרה ב-theme.py/insights.py.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: התקנת תלויות
+        run: pip install -r requirements.txt
+
+      - name: בדיקת עשן — כל התצוגות נטענות בלי שגיאה
+        run: python tests/smoke_test.py
